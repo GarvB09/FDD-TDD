@@ -1,0 +1,282 @@
+{
+  "documentId": "example-lms-tdd",
+  "originalName": "example_fdd.pdf",
+  "generatedAt": "2025-01-01T10:00:00.000Z",
+  "tdd": {
+    "introduction": {
+      "purpose": "This Technical Design Document defines the system architecture, data models, API contracts, and deployment strategy for the Online Learning Management System (LMS). It serves as the authoritative reference for development teams implementing the platform.",
+      "scope": "Covers the full backend and frontend architecture for user management, course lifecycle, enrollment, content delivery, assessment, messaging, payments, and analytics.",
+      "assumptions": [
+        "All video content is hosted on AWS S3 with CloudFront CDN distribution",
+        "Stripe handles all payment processing with webhook-based enrollment triggers",
+        "PostgreSQL is the primary relational database",
+        "Redis is used for session management and caching",
+        "Deployment target is AWS (ECS + RDS + S3)"
+      ],
+      "constraints": [
+        "Node.js backend with Python AI/analytics microservice",
+        "React.js frontend (SPA)",
+        "PostgreSQL + Redis data layer",
+        "Docker containerization required",
+        "GDPR and FERPA compliance mandatory"
+      ],
+      "tech_stack": {
+        "frontend": "React.js 18, MUI v5, Redux Toolkit, Axios",
+        "backend": "Node.js 20, Express.js, Sequelize ORM",
+        "database": "PostgreSQL 15, Redis 7",
+        "infrastructure": "AWS ECS (Fargate), RDS, S3, CloudFront, SES, SQS"
+      }
+    },
+    "system_architecture": {
+      "overview": "The LMS follows a layered microservices architecture with a React SPA frontend, a Node.js API gateway, domain-specific microservices, and managed AWS infrastructure. Services communicate via REST APIs internally and use SQS for async jobs like email dispatch.",
+      "architectural_pattern": "Microservices with API Gateway Pattern",
+      "communication": "REST over HTTPS for synchronous calls; AWS SQS for asynchronous jobs (email, certificate generation)",
+      "components": [
+        {
+          "name": "React SPA",
+          "type": "Frontend",
+          "technology": "React.js + MUI",
+          "responsibility": "Student/Instructor/Admin UI, course browsing, video playback, dashboard"
+        },
+        {
+          "name": "API Gateway",
+          "type": "Backend",
+          "technology": "Node.js + Express",
+          "responsibility": "Request routing, JWT auth middleware, rate limiting"
+        },
+        {
+          "name": "User Service",
+          "type": "Microservice",
+          "technology": "Node.js",
+          "responsibility": "Registration, login, profile, roles, email verification"
+        },
+        {
+          "name": "Course Service",
+          "type": "Microservice",
+          "technology": "Node.js",
+          "responsibility": "Course CRUD, module/lesson management, category management"
+        },
+        {
+          "name": "Enrollment Service",
+          "type": "Microservice",
+          "technology": "Node.js",
+          "responsibility": "Enrollment lifecycle, payment integration, access control"
+        },
+        {
+          "name": "Assessment Service",
+          "type": "Microservice",
+          "technology": "Node.js",
+          "responsibility": "Quizzes, assignment submission, grading, certificates"
+        },
+        {
+          "name": "Notification Service",
+          "type": "Microservice",
+          "technology": "Node.js + SendGrid",
+          "responsibility": "Email notifications via SQS consumer + SendGrid"
+        },
+        {
+          "name": "Analytics Service",
+          "type": "Microservice",
+          "technology": "Python + FastAPI",
+          "responsibility": "Platform analytics, instructor dashboards, CSV exports"
+        },
+        {
+          "name": "PostgreSQL",
+          "type": "Database",
+          "technology": "AWS RDS PostgreSQL 15",
+          "responsibility": "Primary persistent data store"
+        },
+        {
+          "name": "Redis",
+          "type": "Cache",
+          "technology": "AWS ElastiCache Redis",
+          "responsibility": "Session tokens, rate limiting, caching frequent queries"
+        },
+        {
+          "name": "AWS S3 + CloudFront",
+          "type": "Storage/CDN",
+          "technology": "AWS",
+          "responsibility": "Video and file storage with CDN delivery"
+        }
+      ],
+      "mermaid_diagram": "flowchart TB\n  Client[React SPA] --> GW[API Gateway :3000]\n  GW --> US[User Service :3001]\n  GW --> CS[Course Service :3002]\n  GW --> ES[Enrollment Service :3003]\n  GW --> AS[Assessment Service :3004]\n  GW --> ANS[Analytics Service :8001]\n  US --> DB[(PostgreSQL)]\n  CS --> DB\n  ES --> DB\n  AS --> DB\n  ES --> Stripe[Stripe API]\n  CS --> S3[AWS S3]\n  GW --> Redis[(Redis Cache)]\n  US --> SQS[AWS SQS]\n  SQS --> NS[Notification Service]\n  NS --> SG[SendGrid]"
+    },
+    "data_model": {
+      "overview": "Relational schema using PostgreSQL. All tables use UUID primary keys. Soft deletes via deleted_at timestamp. Optimistic locking for concurrent updates on enrollments and grades.",
+      "database_type": "PostgreSQL 15 (AWS RDS Multi-AZ)",
+      "tables": [
+        {
+          "name": "users",
+          "purpose": "Stores all user accounts (students, instructors, admins)",
+          "columns": [
+            { "name": "id", "type": "UUID", "constraints": "PRIMARY KEY DEFAULT gen_random_uuid()", "description": "Unique user identifier" },
+            { "name": "email", "type": "VARCHAR(255)", "constraints": "UNIQUE NOT NULL", "description": "Login email address" },
+            { "name": "password_hash", "type": "VARCHAR(255)", "constraints": "NOT NULL", "description": "bcrypt hashed password" },
+            { "name": "full_name", "type": "VARCHAR(255)", "constraints": "NOT NULL", "description": "Display name" },
+            { "name": "role", "type": "ENUM('student','instructor','admin')", "constraints": "NOT NULL DEFAULT 'student'", "description": "User role" },
+            { "name": "email_verified", "type": "BOOLEAN", "constraints": "DEFAULT false", "description": "Email verification status" },
+            { "name": "is_active", "type": "BOOLEAN", "constraints": "DEFAULT true", "description": "Account active/banned" },
+            { "name": "profile_picture_url", "type": "TEXT", "constraints": "", "description": "S3 URL of profile image" },
+            { "name": "bio", "type": "TEXT", "constraints": "", "description": "User bio/description" },
+            { "name": "created_at", "type": "TIMESTAMPTZ", "constraints": "DEFAULT NOW()", "description": "" },
+            { "name": "deleted_at", "type": "TIMESTAMPTZ", "constraints": "", "description": "Soft delete timestamp" }
+          ],
+          "relationships": ["1:N with courses (instructor_id)", "1:N with enrollments", "1:N with submissions"]
+        },
+        {
+          "name": "courses",
+          "purpose": "Course catalog with metadata and publishing state",
+          "columns": [
+            { "name": "id", "type": "UUID", "constraints": "PRIMARY KEY", "description": "" },
+            { "name": "instructor_id", "type": "UUID", "constraints": "FK → users.id NOT NULL", "description": "Course owner" },
+            { "name": "title", "type": "VARCHAR(255)", "constraints": "NOT NULL", "description": "Course title" },
+            { "name": "description", "type": "TEXT", "constraints": "", "description": "Full course description" },
+            { "name": "category_id", "type": "UUID", "constraints": "FK → categories.id", "description": "Course category" },
+            { "name": "price", "type": "DECIMAL(10,2)", "constraints": "DEFAULT 0.00", "description": "Price in USD (0 = free)" },
+            { "name": "status", "type": "ENUM('draft','published','archived')", "constraints": "DEFAULT 'draft'", "description": "Publishing status" },
+            { "name": "thumbnail_url", "type": "TEXT", "constraints": "", "description": "S3 URL of thumbnail" },
+            { "name": "created_at", "type": "TIMESTAMPTZ", "constraints": "DEFAULT NOW()", "description": "" }
+          ],
+          "relationships": ["N:1 with users (instructor)", "1:N with modules", "1:N with enrollments"]
+        },
+        {
+          "name": "enrollments",
+          "purpose": "Tracks which students are enrolled in which courses",
+          "columns": [
+            { "name": "id", "type": "UUID", "constraints": "PRIMARY KEY", "description": "" },
+            { "name": "student_id", "type": "UUID", "constraints": "FK → users.id NOT NULL", "description": "" },
+            { "name": "course_id", "type": "UUID", "constraints": "FK → courses.id NOT NULL", "description": "" },
+            { "name": "payment_id", "type": "VARCHAR(255)", "constraints": "", "description": "Stripe payment intent ID" },
+            { "name": "amount_paid", "type": "DECIMAL(10,2)", "constraints": "DEFAULT 0.00", "description": "" },
+            { "name": "enrolled_at", "type": "TIMESTAMPTZ", "constraints": "DEFAULT NOW()", "description": "" },
+            { "name": "completed_at", "type": "TIMESTAMPTZ", "constraints": "", "description": "Null until course completed" }
+          ],
+          "relationships": ["UNIQUE(student_id, course_id)", "N:1 with users", "N:1 with courses"]
+        },
+        {
+          "name": "modules",
+          "purpose": "Course modules (chapters/sections) within a course",
+          "columns": [
+            { "name": "id", "type": "UUID", "constraints": "PRIMARY KEY", "description": "" },
+            { "name": "course_id", "type": "UUID", "constraints": "FK → courses.id NOT NULL", "description": "" },
+            { "name": "title", "type": "VARCHAR(255)", "constraints": "NOT NULL", "description": "" },
+            { "name": "order_index", "type": "INTEGER", "constraints": "NOT NULL", "description": "Display order" }
+          ],
+          "relationships": ["N:1 with courses", "1:N with lessons"]
+        },
+        {
+          "name": "lessons",
+          "purpose": "Individual lessons within a module (video, text, quiz)",
+          "columns": [
+            { "name": "id", "type": "UUID", "constraints": "PRIMARY KEY", "description": "" },
+            { "name": "module_id", "type": "UUID", "constraints": "FK → modules.id NOT NULL", "description": "" },
+            { "name": "title", "type": "VARCHAR(255)", "constraints": "NOT NULL", "description": "" },
+            { "name": "type", "type": "ENUM('video','text','quiz','assignment')", "constraints": "NOT NULL", "description": "" },
+            { "name": "video_url", "type": "TEXT", "constraints": "", "description": "S3 presigned URL or CloudFront URL" },
+            { "name": "content", "type": "TEXT", "constraints": "", "description": "Text/HTML content for text lessons" },
+            { "name": "duration_seconds", "type": "INTEGER", "constraints": "", "description": "Video duration" },
+            { "name": "order_index", "type": "INTEGER", "constraints": "NOT NULL", "description": "" },
+            { "name": "is_preview", "type": "BOOLEAN", "constraints": "DEFAULT false", "description": "Free preview lesson" }
+          ],
+          "relationships": ["N:1 with modules", "1:N with lesson_completions"]
+        },
+        {
+          "name": "lesson_completions",
+          "purpose": "Tracks per-student lesson completion status",
+          "columns": [
+            { "name": "id", "type": "UUID", "constraints": "PRIMARY KEY", "description": "" },
+            { "name": "student_id", "type": "UUID", "constraints": "FK → users.id NOT NULL", "description": "" },
+            { "name": "lesson_id", "type": "UUID", "constraints": "FK → lessons.id NOT NULL", "description": "" },
+            { "name": "completed_at", "type": "TIMESTAMPTZ", "constraints": "DEFAULT NOW()", "description": "" }
+          ],
+          "relationships": ["UNIQUE(student_id, lesson_id)"]
+        },
+        {
+          "name": "certificates",
+          "purpose": "Certificates issued to students who pass a course",
+          "columns": [
+            { "name": "id", "type": "UUID", "constraints": "PRIMARY KEY", "description": "" },
+            { "name": "student_id", "type": "UUID", "constraints": "FK → users.id NOT NULL", "description": "" },
+            { "name": "course_id", "type": "UUID", "constraints": "FK → courses.id NOT NULL", "description": "" },
+            { "name": "certificate_url", "type": "TEXT", "constraints": "", "description": "S3 URL of generated PDF certificate" },
+            { "name": "final_grade", "type": "DECIMAL(5,2)", "constraints": "NOT NULL", "description": "Grade % at time of issuance" },
+            { "name": "issued_at", "type": "TIMESTAMPTZ", "constraints": "DEFAULT NOW()", "description": "" }
+          ],
+          "relationships": ["UNIQUE(student_id, course_id)", "N:1 users", "N:1 courses"]
+        }
+      ]
+    },
+    "api_design": {
+      "overview": "RESTful API using JSON. All authenticated endpoints require Authorization: Bearer <JWT> header. Versioned under /api/v1.",
+      "base_url": "https://api.lms.example.com/api/v1",
+      "authentication": "JWT Bearer tokens (Access: 15min, Refresh: 7 days) via Authorization header",
+      "endpoints": [
+        { "method": "POST", "path": "/auth/register", "description": "Register new user account", "request_body": "{ email, password, full_name, role }", "response": "{ user, access_token, refresh_token }", "fdd_requirement": "FR-001: system shall allow users to register" },
+        { "method": "POST", "path": "/auth/login", "description": "Authenticate user and return JWT tokens", "request_body": "{ email, password } or OAuth token", "response": "{ access_token, refresh_token, user }", "fdd_requirement": "FR-002: system shall allow users to log in" },
+        { "method": "POST", "path": "/auth/verify-email", "description": "Verify email address with token from email", "request_body": "{ token }", "response": "{ success: true }", "fdd_requirement": "FR-006: Users must verify email" },
+        { "method": "GET", "path": "/users/me", "description": "Get authenticated user profile", "request_body": "None", "response": "{ user object }", "fdd_requirement": "FR-004: Users shall update profile" },
+        { "method": "PUT", "path": "/users/me", "description": "Update user profile (name, bio, picture)", "request_body": "{ full_name?, bio?, profile_picture? }", "response": "{ updated user }", "fdd_requirement": "FR-004: Users shall update profile" },
+        { "method": "GET", "path": "/courses", "description": "List/search published courses with filters", "request_body": "Query: ?q=&category=&page=&limit=", "response": "{ courses[], total, page }", "fdd_requirement": "FR-014: Students shall search and browse courses" },
+        { "method": "POST", "path": "/courses", "description": "Create a new course (Instructor only)", "request_body": "{ title, description, category_id, price }", "response": "{ course }", "fdd_requirement": "FR-007: Instructors shall create a course" },
+        { "method": "PUT", "path": "/courses/:id", "description": "Update course details or publish/unpublish", "request_body": "{ title?, description?, status? }", "response": "{ course }", "fdd_requirement": "FR-011: Instructors shall set course as draft or published" },
+        { "method": "POST", "path": "/courses/:id/modules", "description": "Add module to course", "request_body": "{ title, order_index }", "response": "{ module }", "fdd_requirement": "FR-008: Instructors shall add modules and lessons" },
+        { "method": "POST", "path": "/courses/:id/modules/:moduleId/lessons", "description": "Add lesson to module (supports video upload via presigned S3 URL)", "request_body": "{ title, type, content?, duration? }", "response": "{ lesson, upload_url? }", "fdd_requirement": "FR-009: Instructors shall upload video lectures" },
+        { "method": "POST", "path": "/enrollments", "description": "Enroll student in a course (triggers Stripe for paid courses)", "request_body": "{ course_id }", "response": "{ enrollment } or { checkout_url } for paid", "fdd_requirement": "FR-015, FR-016: Students enroll in courses" },
+        { "method": "GET", "path": "/enrollments/my", "description": "Get all courses the authenticated student is enrolled in", "request_body": "None", "response": "{ enrollments[] }", "fdd_requirement": "FR-018: Students view enrolled courses in dashboard" },
+        { "method": "POST", "path": "/webhooks/stripe", "description": "Stripe webhook endpoint for payment confirmation", "request_body": "Stripe event payload", "response": "{ received: true }", "fdd_requirement": "FR-016: payment-triggered enrollment" },
+        { "method": "POST", "path": "/lessons/:id/complete", "description": "Mark a lesson as completed by the authenticated student", "request_body": "None", "response": "{ progress_percentage }", "fdd_requirement": "FR-020: system must track lesson completion" },
+        { "method": "POST", "path": "/assignments/:id/submit", "description": "Submit assignment file for a lesson", "request_body": "multipart/form-data with file", "response": "{ submission }", "fdd_requirement": "FR-024: Students submit assignments as file uploads" },
+        { "method": "PUT", "path": "/submissions/:id/grade", "description": "Instructor grades a submission with score and feedback", "request_body": "{ grade, feedback }", "response": "{ submission }", "fdd_requirement": "FR-025: Instructors grade assignments" },
+        { "method": "GET", "path": "/analytics/platform", "description": "Admin: platform-level metrics (users, enrollments, revenue)", "request_body": "None", "response": "{ total_users, total_enrollments, total_revenue }", "fdd_requirement": "FR-032: Admin views platform analytics" },
+        { "method": "GET", "path": "/analytics/courses/:id", "description": "Instructor: course-level analytics (enrollment, completion rate)", "request_body": "None", "response": "{ enrollment_count, completion_rate, student_progress[] }", "fdd_requirement": "FR-033: Instructors view course analytics" }
+      ]
+    },
+    "component_architecture": {
+      "overview": "Frontend is a React SPA with Redux Toolkit for global state. Backend services are domain-isolated Node.js modules sharing a common PostgreSQL connection pool.",
+      "frontend_components": [
+        { "name": "AuthProvider", "type": "Context", "responsibility": "Manages JWT tokens, user session, and auto-refresh logic", "props": "children" },
+        { "name": "CourseCard", "type": "UI Component", "responsibility": "Displays course thumbnail, title, instructor, price, and rating", "props": "course, onClick" },
+        { "name": "VideoPlayer", "type": "Feature Component", "responsibility": "Embeds video player with progress tracking, auto-marks lesson complete at 90%", "props": "videoUrl, lessonId, onComplete" },
+        { "name": "EnrollButton", "type": "UI Component", "responsibility": "Handles free enrollment or Stripe checkout redirect based on course price", "props": "courseId, price" },
+        { "name": "InstructorDashboard", "type": "Page", "responsibility": "Course management, analytics charts, student progress views", "props": "None (uses Redux state)" },
+        { "name": "GradebookTable", "type": "Feature Component", "responsibility": "Tabular view of all student grades for a course with bulk actions", "props": "courseId" },
+        { "name": "ProgressTracker", "type": "UI Component", "responsibility": "Visual progress bar with lesson checklist for enrolled course", "props": "enrollment, lessons" }
+      ],
+      "backend_services": [
+        { "name": "AuthService", "responsibility": "JWT generation, bcrypt password hashing, OAuth token exchange, refresh token rotation", "methods": ["register", "login", "verifyEmail", "refreshToken", "oauthLogin"] },
+        { "name": "CourseService", "responsibility": "Full course CRUD, S3 presigned URL generation for video uploads, category management", "methods": ["create", "update", "publish", "addModule", "addLesson", "generateUploadUrl"] },
+        { "name": "EnrollmentService", "responsibility": "Enrollment creation, Stripe session creation, webhook processing, access verification", "methods": ["enroll", "createCheckoutSession", "handleStripeWebhook", "checkAccess"] },
+        { "name": "AssessmentService", "responsibility": "Quiz auto-grading, assignment submission, manual grading, certificate generation", "methods": ["submitQuiz", "submitAssignment", "gradeSubmission", "issueCertificate"] },
+        { "name": "NotificationService", "responsibility": "Async SQS consumer that sends emails via SendGrid for all platform events", "methods": ["sendEnrollmentConfirmation", "sendGradeNotification", "sendAnnouncement"] },
+        { "name": "ProgressService", "responsibility": "Tracks lesson completions, calculates course progress percentage, unlocks modules", "methods": ["markComplete", "getProgress", "checkModuleUnlock"] }
+      ]
+    },
+    "non_functional_requirements": {
+      "performance": "API P95 response time < 500ms. Video delivery via CloudFront CDN for < 2s time-to-first-byte globally. Horizontal scaling via ECS Fargate. Redis caching for course listings and user profiles.",
+      "scalability": "Stateless microservices deployable on ECS Fargate with auto-scaling policies. PostgreSQL read replicas for analytics queries. SQS-based async processing for email and certificate generation prevents blocking.",
+      "security": "JWT RS256 signed tokens. bcrypt (cost 12) for password hashing. All data encrypted at rest (AES-256 RDS) and in transit (TLS 1.3). GDPR: right to erasure via soft delete + scheduled data purge. FERPA: audit logs for all grade access.",
+      "availability": "99.9% SLA achieved via multi-AZ RDS, ECS multi-AZ task placement, and Route53 health checks with failover. Graceful degradation: video delivery independent of API availability via CloudFront.",
+      "maintainability": "Modular microservice architecture. Each service has isolated DB schema access. OpenAPI 3.0 auto-generated docs. Structured logging with correlation IDs. Centralized error handling middleware.",
+      "compliance": "GDPR: data minimization, consent management, right to erasure, data export. FERPA: access controls on grade data, audit trail. PCI-DSS: no card data stored (Stripe handles all card data)."
+    },
+    "deployment_architecture": {
+      "overview": "AWS-based containerized deployment using ECS Fargate for all services, RDS PostgreSQL Multi-AZ for the database, ElastiCache Redis, and S3 + CloudFront for media.",
+      "infrastructure": "AWS ECS Fargate (microservices), RDS PostgreSQL Multi-AZ, ElastiCache Redis cluster, S3 (media + backups), CloudFront (CDN), SQS (async jobs), SES → SendGrid (email), Route53 + ACM (DNS + TLS)",
+      "ci_cd": "GitHub Actions: lint → unit tests → integration tests → Docker build → ECR push → ECS rolling deploy. Blue/green deployment strategy via CodeDeploy. Environment promotion: dev → staging → production.",
+      "monitoring": "CloudWatch for infrastructure metrics and logs. Datadog APM for distributed tracing across services. PagerDuty alerts for P1 incidents. Sentry for frontend error tracking.",
+      "environments": ["development (local Docker Compose)", "staging (AWS ECS - reduced capacity)", "production (AWS ECS - full HA)"],
+      "mermaid_diagram": "graph TD\n  Internet --> CF[CloudFront CDN]\n  Internet --> ALB[Application Load Balancer]\n  CF --> S3[S3 Media Bucket]\n  ALB --> ECS_GW[API Gateway - ECS Fargate]\n  ECS_GW --> ECS_US[User Service]\n  ECS_GW --> ECS_CS[Course Service]\n  ECS_GW --> ECS_ES[Enrollment Service]\n  ECS_GW --> ECS_AS[Assessment Service]\n  ECS_US --> RDS[(RDS PostgreSQL Multi-AZ)]\n  ECS_CS --> RDS\n  ECS_ES --> RDS\n  ECS_AS --> RDS\n  ECS_GW --> Redis[(ElastiCache Redis)]\n  ECS_ES --> Stripe[Stripe API]\n  ECS_US --> SQS[AWS SQS]\n  SQS --> NS[Notification Worker - ECS]\n  NS --> SG[SendGrid]"
+    },
+    "traceability_matrix": [
+      { "fdd_requirement": "FR-001: The system shall allow users to register an account with email and password.", "tdd_apis": ["POST /auth/register"], "tdd_tables": ["users"], "tdd_components": ["AuthService", "AuthProvider"], "coverage": "full" },
+      { "fdd_requirement": "FR-002: The system shall allow users to log in using email/password or OAuth.", "tdd_apis": ["POST /auth/login"], "tdd_tables": ["users"], "tdd_components": ["AuthService", "AuthProvider"], "coverage": "full" },
+      { "fdd_requirement": "FR-007: Instructors shall be able to create a new course.", "tdd_apis": ["POST /courses"], "tdd_tables": ["courses"], "tdd_components": ["CourseService", "InstructorDashboard"], "coverage": "full" },
+      { "fdd_requirement": "FR-014: Students shall be able to search and browse available courses.", "tdd_apis": ["GET /courses"], "tdd_tables": ["courses"], "tdd_components": ["CourseCard"], "coverage": "full" },
+      { "fdd_requirement": "FR-016: Students must complete payment via Stripe before enrolling in paid courses.", "tdd_apis": ["POST /enrollments", "POST /webhooks/stripe"], "tdd_tables": ["enrollments"], "tdd_components": ["EnrollmentService", "EnrollButton"], "coverage": "full" },
+      { "fdd_requirement": "FR-020: The system must track lesson completion for each student.", "tdd_apis": ["POST /lessons/:id/complete"], "tdd_tables": ["lesson_completions"], "tdd_components": ["ProgressService", "VideoPlayer", "ProgressTracker"], "coverage": "full" },
+      { "fdd_requirement": "FR-024: The system shall allow students to submit assignments as file uploads.", "tdd_apis": ["POST /assignments/:id/submit"], "tdd_tables": ["enrollments"], "tdd_components": ["AssessmentService"], "coverage": "full" },
+      { "fdd_requirement": "FR-027: Students shall receive a certificate upon finishing with >= 60% grade.", "tdd_apis": ["PUT /submissions/:id/grade"], "tdd_tables": ["certificates"], "tdd_components": ["AssessmentService"], "coverage": "full" },
+      { "fdd_requirement": "FR-032: Admin shall view platform-level analytics.", "tdd_apis": ["GET /analytics/platform"], "tdd_tables": [], "tdd_components": ["InstructorDashboard"], "coverage": "full" }
+    ]
+  }
+}

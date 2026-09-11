@@ -1,0 +1,23 @@
+{
+  "name": "fdd-tdd-backend",
+  "version": "1.0.0",
+  "description": "Express backend for FDD to TDD converter",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.8",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "fs-extra": "^11.2.0",
+    "markdown-it": "^14.1.0",
+    "multer": "^1.4.5-lts.1",
+    "puppeteer": "^24.40.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
