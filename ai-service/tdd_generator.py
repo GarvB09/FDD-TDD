@@ -214,20 +214,8 @@ def generate_tdd_with_claude(raw_text: str, components: Dict) -> Dict:
         return _generate_tdd_single_prompt(raw_text, components)
 
 
-def _generate_tdd_single_prompt(raw_text: str, components: Dict) -> Dict:
-    """Fallback: original single Groq prompt approach."""
-    try:
-        from groq import Groq
-    except ImportError:
-        raise RuntimeError("groq not installed.")
-
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        raise RuntimeError("GROQ_API_KEY not set.")
-
-    client = Groq(api_key=api_key)
-    user_prompt = build_user_prompt(raw_text, components)
-
+def _call_single_prompt_once(client, user_prompt: str) -> Dict:
+    """Single Groq request + JSON parse for the whole-document fallback. May raise."""
     # 5000, not 8192: this account's Groq tier caps a single request at 8000
     # tokens/minute total, checked against max_tokens + prompt size together.
     # This prompt alone runs ~2500-3000 tokens (raw text + every extracted
@@ -259,18 +247,52 @@ def _generate_tdd_single_prompt(raw_text: str, components: Dict) -> Dict:
         lines = raw_response.split("\n")
         raw_response = "\n".join(lines[1:-1]) if lines[-1] == "```" else "\n".join(lines[1:])
 
-    try:
-        return json.loads(raw_response)
-    except json.JSONDecodeError as e:
-        return {
-            "parse_error": str(e),
-            "introduction": {"purpose": "Parse error", "scope": "", "assumptions": [], "constraints": [], "tech_stack": {}},
-            "system_architecture": {"overview": "", "components": [], "mermaid_diagram": ""},
-            "data_model": {"tables": []},
-            "api_design": {"endpoints": []},
-            "component_architecture": {"frontend_components": [], "backend_services": []},
-            "non_functional_requirements": {},
-            "deployment_architecture": {"environments": [], "mermaid_diagram": ""}
-        }
+    return json.loads(raw_response)  # may raise json.JSONDecodeError
 
-    return tdd
+
+def _generate_tdd_single_prompt(raw_text: str, components: Dict) -> Dict:
+    """
+    Fallback: single Groq prompt asking for the whole document at once, used
+    only when the sectioned MCP pipeline fails entirely.
+
+    Retries once on any failure (malformed JSON or an API-level error like a
+    rate limit) before giving up -- this is the last line of defense, so it
+    previously had none: a single bad response here meant the user saw a
+    document with "Parse error" literally shown as the Purpose text and no
+    server-side log explaining why, which is much harder to diagnose than a
+    single tool failing inside the MCP pipeline (which does log and retry).
+    """
+    try:
+        from groq import Groq
+    except ImportError:
+        raise RuntimeError("groq not installed.")
+
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY not set.")
+
+    client = Groq(api_key=api_key)
+    user_prompt = build_user_prompt(raw_text, components)
+
+    last_error = None
+    for attempt in (1, 2):
+        logger.info("[Fallback] Single-prompt generation" + (" (retry)" if attempt == 2 else ""))
+        try:
+            return _call_single_prompt_once(client, user_prompt)
+        except json.JSONDecodeError as e:
+            logger.error(f"[Fallback] JSON parse error (attempt {attempt}): {e}")
+            last_error = e
+        except Exception as e:
+            logger.error(f"[Fallback] Request failed (attempt {attempt}): {e}")
+            last_error = e
+
+    return {
+        "parse_error": str(last_error),
+        "introduction": {"purpose": "Parse error", "scope": "", "assumptions": [], "constraints": [], "tech_stack": {}},
+        "system_architecture": {"overview": "", "components": [], "mermaid_diagram": ""},
+        "data_model": {"tables": []},
+        "api_design": {"endpoints": []},
+        "component_architecture": {"frontend_components": [], "backend_services": []},
+        "non_functional_requirements": {},
+        "deployment_architecture": {"environments": [], "mermaid_diagram": ""}
+    }

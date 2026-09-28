@@ -65,15 +65,22 @@ def _call_llm_once(client: Groq, prompt: str, tool_name: str, max_tokens: int) -
 
 def call_llm(prompt: str, tool_name: str, max_tokens: int = 5500) -> Dict:
     """
-    Call Groq LLM for a specific tool, with one retry on malformed JSON.
+    Call Groq LLM for a specific tool, with one retry on failure.
 
-    A garbled/truncated response is often one-off noise -- rerunning the
-    exact same prompt frequently comes back clean the second time. This
-    directly targets the failure mode that was showing up as sections
-    silently going empty (e.g. the ER diagram falling back to a "NO_DATA"
-    placeholder when er_generator's JSON didn't parse). Only retries on a
-    parse failure, not on every call, so it doesn't add cost to the common
-    case where the first response is already valid.
+    Catches BOTH malformed JSON and API-level failures (rate limits, network
+    errors, etc.) -- a garbled/truncated response is often one-off noise
+    that a second attempt clears up, and a transient rate-limit rejection
+    frequently succeeds a few seconds later once the account's per-minute
+    budget has partially refilled.
+
+    Critically, this never lets an exception escape to the caller: it always
+    returns a dict, with an "error" key on failure. run_mcp_pipeline treats
+    each of the 5 tools independently (a failed one just means that section
+    falls back to an empty default), so a single stubborn tool degrading
+    gracefully here is what lets the other 4 results still make it into the
+    final document -- letting the exception propagate instead would discard
+    every tool's work, including ones that had already succeeded, and force
+    a fallback to the much lower-quality single-prompt path for nothing.
     """
     client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
@@ -83,6 +90,9 @@ def call_llm(prompt: str, tool_name: str, max_tokens: int = 5500) -> Dict:
             return _call_llm_once(client, prompt, tool_name, max_tokens)
         except json.JSONDecodeError as e:
             logger.error(f"[MCP] {tool_name} JSON parse error (attempt {attempt}): {e}")
+            last_error = e
+        except Exception as e:
+            logger.error(f"[MCP] {tool_name} request failed (attempt {attempt}): {e}")
             last_error = e
 
     return {"error": str(last_error)}

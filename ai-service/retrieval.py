@@ -37,13 +37,16 @@ _embedding_cache_lock = threading.Lock()
 _EMBEDDING_CACHE_MAX_ENTRIES = 20
 
 
-def _get_model():
+def get_model():
     """
     Lazily load the embedding model once per process (it's ~90MB).
 
-    Guarded by a lock: the 3 MCP tools that use retrieval now run
-    concurrently in a thread pool, so without this, a cold start could have
-    all 3 threads see `_model is None` at once and race to load it.
+    Guarded by a lock: several callers (the MCP tools that use retrieval,
+    and traceability.py's semantic matching) can hit this concurrently, so
+    without the lock a cold start could have multiple threads see
+    `_model is None` at once and race to load it. Public (no leading
+    underscore) because traceability.py reuses this same model rather than
+    loading its own second copy.
     """
     global _model
     if _model is None:
@@ -78,7 +81,7 @@ def _get_chunk_embeddings(raw_text: str, chunks: list):
             _embedding_cache.move_to_end(key)
             return cached
 
-    model = _get_model()
+    model = get_model()
     chunk_embeddings = model.encode(chunks, convert_to_numpy=True)
 
     with _embedding_cache_lock:
@@ -104,7 +107,7 @@ def get_relevant_context(raw_text: str, query: str, top_k: int = 5, max_chars: i
         return raw_text[:max_chars]
 
     try:
-        model = _get_model()
+        model = get_model()
         chunk_embeddings = _get_chunk_embeddings(raw_text, chunks)
         query_embedding = model.encode([query], convert_to_numpy=True)[0]
 
