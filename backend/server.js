@@ -19,9 +19,13 @@ fs.ensureDirSync(path.join(__dirname, "../uploads"));
 fs.ensureDirSync(path.join(__dirname, "../generated_tdd"));
 
 // Middleware
+// FRONTEND_URL may be a comma-separated list, e.g.
+// "https://my-app.vercel.app,http://localhost:3000"
+const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:3000")
+  .split(",").map((s) => s.trim().replace(/\/$/, "")).filter(Boolean);
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
-  methods: ["GET", "POST", "DELETE"],
+  origin: (origin, cb) => cb(null, !origin || allowedOrigins.includes(origin)),
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 app.use(express.json({ limit: "50mb" }));

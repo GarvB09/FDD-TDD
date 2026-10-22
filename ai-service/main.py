@@ -9,6 +9,9 @@ from pydantic import BaseModel
 from typing import Optional
 import uvicorn
 import logging
+import base64
+import os
+import tempfile
 
 from document_parser import extract_text_from_pdf, extract_text_from_docx, extract_text_from_md
 from nlp_processor import extract_functional_components
@@ -36,7 +39,11 @@ app.add_middleware(
 
 
 class ParseRequest(BaseModel):
-    file_path: str
+    # Either a path readable by this service (same-machine setups) or the
+    # file's bytes as base64 (needed when backend and AI service are deployed
+    # on separate hosts and don't share a disk).
+    file_path: Optional[str] = None
+    content_b64: Optional[str] = None
     file_type: str  # "pdf", "docx", or "md"
 
 
@@ -59,26 +66,38 @@ def health_check():
 @app.post("/parse-document")
 async def parse_document(req: ParseRequest):
     """Extract raw text from a PDF, DOCX, or Markdown file."""
+    if req.file_type not in ("pdf", "docx", "md"):
+        raise HTTPException(status_code=400, detail="Unsupported file type. Use 'pdf', 'docx', or 'md'.")
+    if not req.file_path and not req.content_b64:
+        raise HTTPException(status_code=400, detail="Provide file_path or content_b64.")
+
+    parsers = {"pdf": extract_text_from_pdf, "docx": extract_text_from_docx, "md": extract_text_from_md}
+    tmp_path = None
     try:
-        if req.file_type == "pdf":
-            text = extract_text_from_pdf(req.file_path)
-        elif req.file_type == "docx":
-            text = extract_text_from_docx(req.file_path)
-        elif req.file_type == "md":
-            text = extract_text_from_md(req.file_path)
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported file type. Use 'pdf', 'docx', or 'md'.")
+        path = req.file_path
+        if req.content_b64:
+            with tempfile.NamedTemporaryFile(delete=False, suffix="." + req.file_type) as tmp:
+                tmp.write(base64.b64decode(req.content_b64))
+                tmp_path = tmp.name
+            path = tmp_path
+
+        text = parsers[req.file_type](path)
 
         if not text.strip():
             raise HTTPException(status_code=422, detail="No text could be extracted from the document.")
 
         return {"success": True, "text": text, "char_count": len(text)}
 
+    except HTTPException:
+        raise
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"File not found: {req.file_path}")
     except Exception as e:
         logger.error(f"Parse error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 @app.post("/extract-components")

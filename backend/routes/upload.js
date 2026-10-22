@@ -62,10 +62,12 @@ router.post("/upload-fdd", upload.single("fdd"), async (req, res, next) => {
     console.log(`[Upload] File received: ${req.file.originalname} → ${filePath}`);
 
     // Step 1: Parse document text
+    // Send the bytes, not the path: the AI service may run on a different
+    // host (e.g. separate Render services) and can't read this disk.
     const parseRes = await axios.post(`${AI_SERVICE_URL}/parse-document`, {
-      file_path: filePath,
+      content_b64: (await fs.readFile(filePath)).toString("base64"),
       file_type: fileExt,
-    });
+    }, { maxBodyLength: Infinity, maxContentLength: Infinity });
 
     const { text } = parseRes.data;
 

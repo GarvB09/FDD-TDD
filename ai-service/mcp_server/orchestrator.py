@@ -40,6 +40,10 @@ def _call_llm_once(client: Groq, prompt: str, tool_name: str, max_tokens: int) -
         model="openai/gpt-oss-20b",
         max_tokens=max_tokens,
         reasoning_effort="low",
+        # JSON mode: the API itself enforces syntactically valid JSON, which
+        # guards against the intermittent "Expecting ',' delimiter" failures
+        # that left sections (e.g. deployment architecture) empty.
+        response_format={"type": "json_object"},
         temperature=0.2,
         messages=[
             {

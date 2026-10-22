@@ -1,0 +1,28 @@
+# Render Blueprint: backend + AI service. The frontend is deployed on Vercel.
+# Render dashboard -> New -> Blueprint -> pick this repo.
+services:
+  - type: web
+    name: fdd-ai-service
+    runtime: docker
+    dockerfilePath: ./ai-service/Dockerfile
+    dockerContext: ./ai-service
+    healthCheckPath: /health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false            # paste your key in the Render dashboard
+      - key: GENERATE_COOLDOWN_SECONDS
+        value: "60"
+
+  - type: web
+    name: fdd-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AI_SERVICE_URL
+        sync: false            # e.g. https://fdd-ai-service.onrender.com
+      - key: FRONTEND_URL
+        sync: false            # your Vercel URL, e.g. https://fdd-tdd.vercel.app
