@@ -44,6 +44,10 @@ Blueprints require a card on file. To stay free, create the services by hand ins
 
 `Dockerfile.lite` skips PyTorch so it fits in the free 512 MB. The only difference: document-chunk selection falls back to the start of the document, so very long FDDs may generate slightly less well.
 
+### Simplest free setup: one Render service for both
+
+The root `Dockerfile` runs the backend and the lite AI service in a single container. Create ONE Web Service: Runtime **Docker**, **Root Directory empty**, **Dockerfile Path `./Dockerfile`**, Instance **Free**. Env vars: `GROQ_API_KEY` and `FRONTEND_URL` (no `AI_SERVICE_URL` needed). Then `REACT_APP_API_URL` on Vercel is `https://<this-service>.onrender.com/api`. Memory is tight on 512 MB (PDF export launches Chromium), so if it restarts during PDF export, upgrade the instance.
+
 ## Things to know
 
 - **Memory:** the AI service loads PyTorch plus the embedding model. Render's free 512 MB instance will likely run out of memory; use at least a 2 GB instance for `fdd-ai-service`.

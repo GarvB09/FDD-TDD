@@ -1,0 +1,10 @@
+**/node_modules
+**/venv
+**/.venv
+**/__pycache__
+**/build
+.git
+.env
+uploads/*
+generated_tdd/*
+*.docx
