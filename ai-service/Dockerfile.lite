@@ -1,0 +1,15 @@
+# Lite build for small/free hosts (512 MB RAM): same service, but without
+# PyTorch / sentence-transformers. retrieval.py catches the missing import and
+# falls back to using the start of the document instead of embedding-based
+# chunk selection. Everything else behaves identically.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements-lite.txt .
+RUN pip install --no-cache-dir -r requirements-lite.txt
+
+COPY . .
+
+EXPOSE 8000
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]

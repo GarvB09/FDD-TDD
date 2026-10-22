@@ -33,6 +33,17 @@ Check `https://<backend>.onrender.com/health`.
    - It is baked in at build time, so set it *before* the first deploy (or redeploy after changing it).
 4. Deploy, then copy the Vercel URL into the backend's `FRONTEND_URL` on Render and let it redeploy. Without this, the browser blocks every API call (CORS).
 
+## Free tier without a card (no Blueprint)
+
+Blueprints require a card on file. To stay free, create the services by hand instead: **New → Web Service → connect this repo → Runtime: Docker → Instance type: Free**.
+
+| Service | Root Directory | Dockerfile Path | Env vars |
+|---|---|---|---|
+| AI service | `ai-service` | `./Dockerfile.lite` | `GROQ_API_KEY` |
+| Backend | `backend` | `./Dockerfile` | `AI_SERVICE_URL`, `FRONTEND_URL` |
+
+`Dockerfile.lite` skips PyTorch so it fits in the free 512 MB. The only difference: document-chunk selection falls back to the start of the document, so very long FDDs may generate slightly less well.
+
 ## Things to know
 
 - **Memory:** the AI service loads PyTorch plus the embedding model. Render's free 512 MB instance will likely run out of memory; use at least a 2 GB instance for `fdd-ai-service`.
