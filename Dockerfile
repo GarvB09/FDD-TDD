@@ -23,6 +23,7 @@ COPY backend/package*.json backend/
 RUN cd backend && npm ci --omit=dev
 
 COPY ai-service ai-service
+COPY testing testing
 COPY backend backend
 RUN mkdir -p /app/uploads /app/generated_tdd
 
